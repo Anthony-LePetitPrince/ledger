@@ -206,7 +206,7 @@ async function api(url,opt){
   opt=opt||{};
   const r=await fetch(url,{...opt,headers:{...(opt.headers||{}),Authorization:'Bearer '+token}});
   if(r.status===401){token=null;throw new Error('auth')}
-  if(!r.ok)throw new Error('http '+r.status);
+  if(!r.ok){let t='';try{t=(await r.text()).replace(/\s+/g,' ').slice(0,300)}catch(e){}throw new Error('http '+r.status+' '+t)}
   return r;
 }
 async function sync(interactive){
@@ -240,8 +240,9 @@ async function sync(interactive){
       await api('https://www.googleapis.com/upload/drive/v3/files/'+id+'?uploadType=media',{method:'PATCH',headers:{'Content-Type':'application/json; charset=UTF-8'},body:body});
     }
     cfg.fileId=id;cfg.last=Date.now();saveCfg();
-    setStatus('已同步');if(was!==body||interactive)render();
+    cfg.err='';saveCfg();setStatus('已同步');if(was!==body||interactive)render();
   }catch(e){
+    cfg.err=String(e&&e.message||e).slice(0,400);saveCfg();
     setStatus(e.message==='auth'?'需重新連線':(navigator.onLine?'同步失敗':'離線'));
   }finally{syncing=false;if(again){again=false;schedSync()}}
 }
@@ -388,7 +389,8 @@ function viewSettings(){
   let h='<div class="card"><h3>Google Drive 同步</h3><div class="mut" style="margin-bottom:8px">資料存在你 Drive 的「'+FN+'」，只有本程式建立的檔案會被存取。</div>'+
    '<input id="cid" placeholder="OAuth Client ID（xxxx.apps.googleusercontent.com）" value="'+esc(cfg.clientId||'')+'">'+
    '<div class="btns"><button class="btn p" onclick="connect()">'+(ok?'重新連線並同步':'連線 Google Drive')+'</button>'+(ok?'<button class="btn d" onclick="disconnect()">中斷</button>':'')+'</div>'+
-   (cfg.last?'<div class="mut" style="margin-top:8px">上次同步：'+new Date(cfg.last).toLocaleString()+'</div>':'')+'</div>';
+   (cfg.last?'<div class="mut" style="margin-top:8px">上次同步：'+new Date(cfg.last).toLocaleString()+'</div>':'')+
+   (cfg.err?'<div class="mut" style="margin-top:8px;color:var(--bad);word-break:break-all">最近錯誤：'+esc(cfg.err)+'</div>':'')+'</div>';
   const rs=(db.recurring||[]).filter(r=>!r.d);
   h+='<div class="card"><h3>固定收支</h3>'+(rs.length?rs.map(r=>'<div class="bi"><div style="flex:1"><div>'+esc(r.name)+'</div><div class="mut">每月 '+r.day+' 日・'+esc(catById(r.catId).name)+(r.sub?'・'+esc(r.sub):'')+'・'+(r.type==='income'?'+':'-')+fmt(r.amount)+'</div></div><button class="btn s" onclick="openRec(\''+r.id+'\')">編輯</button><button class="btn s d" onclick="delRec(\''+r.id+'\')">刪除</button></div>').join(''):'<div class="mut">尚未設定，例如手機費、管理費</div>')+'<div class="btns"><button class="btn" onclick="openRec()">+ 新增固定收支</button></div></div>';
   [['expense','支出分類'],['income','收入分類']].forEach(([t,n])=>{
