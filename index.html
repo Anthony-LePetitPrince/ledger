@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
 <meta name="theme-color" content="#0f766e">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -94,6 +95,7 @@ const fmt=n=>(Math.round(n*100)/100).toLocaleString('en-US');
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate())};
 const WD=['日','一','二','三','四','五','六'];
 const now=new Date();
+const VER='v2.2・2026-10-23 21:36・第 5 次更新';
 const curYM=()=>{const d=new Date();return d.getFullYear()+'-'+p2(d.getMonth()+1)};
 
 function defDB(){
@@ -117,6 +119,10 @@ const saveCfg=()=>localStorage.setItem(CF,JSON.stringify(cfg));
 let S={view:'home',ym:curYM(),statType:'expense'};
 let R={unit:'month',ref:curYM(),from:'',to:''};
 let token=null,tokenExp=0,tc=null,syncing=false,again=false,status='未連線',timer=null;
+const TK='ledger_tok_v1';
+function saveTok(){try{localStorage.setItem(TK,JSON.stringify({t:token,e:tokenExp}))}catch(e){}}
+function clearTok(){try{localStorage.removeItem(TK)}catch(e){}}
+try{const k=JSON.parse(localStorage.getItem(TK)||'null');if(k&&k.e>Date.now()){token=k.t;tokenExp=k.e}}catch(e){}
 
 const cats=t=>db.categories.filter(c=>!c.d&&(!t||c.type===t));
 const catById=id=>db.categories.find(c=>c.id===id)||{name:'(已刪除)',color:'#999',type:'expense',subs:[]};
@@ -188,7 +194,7 @@ const ser=d=>stable({v:1,categories:sortId(d.categories),entries:sortId(d.entrie
 function mergeList(x,y){const m=new Map();[...(x||[]),...(y||[])].forEach(i=>{const p=m.get(i.id);if(!p||(i.u||0)>(p.u||0))m.set(i.id,i)});return[...m.values()]}
 const mergeDB=(a,b)=>migrate({v:1,categories:mergeList(a.categories,b.categories),entries:mergeList(a.entries,b.entries),budgets:mergeList(a.budgets,b.budgets),recurring:mergeList(a.recurring,b.recurring)});
 function setStatus(s){status=s;const el=$('#st');if(el){el.textContent=s;el.className='st '+(s==='已同步'?'ok':(s==='同步失敗'||s==='需重新連線')?'bad':'')}}
-function schedSync(){clearTimeout(timer);if(cfg.clientId&&cfg.authed)timer=setTimeout(()=>sync(false),1500)}
+function schedSync(){clearTimeout(timer);if(cfg.clientId&&cfg.authed)timer=setTimeout(()=>sync(false),800)}
 function loadGIS(){return new Promise((res,rej)=>{if(window.google&&google.accounts)return res();const s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
 async function initAuth(){
   if(!cfg.clientId)return;
@@ -197,15 +203,16 @@ async function initAuth(){
 function requestToken(prompt){
   return new Promise((res,rej)=>{
     if(!tc)return rej(new Error('auth'));
-    tc.callback=r=>{if(r.error)return rej(new Error('auth'));token=r.access_token;tokenExp=Date.now()+(r.expires_in-60)*1000;cfg.authed=1;saveCfg();res(token)};
+    tc.callback=r=>{if(r.error)return rej(new Error('auth'));token=r.access_token;tokenExp=Date.now()+(r.expires_in-60)*1000;cfg.authed=1;saveCfg();saveTok();res(token)};
     tc.error_callback=()=>rej(new Error('auth'));
-    tc.requestAccessToken({prompt});
+    const o={prompt};if(cfg.email)o.hint=cfg.email;
+    tc.requestAccessToken(o);
   });
 }
 async function api(url,opt){
   opt=opt||{};
   const r=await fetch(url,{...opt,headers:{...(opt.headers||{}),Authorization:'Bearer '+token}});
-  if(r.status===401){token=null;throw new Error('auth')}
+  if(r.status===401){token=null;clearTok();throw new Error('auth')}
   if(!r.ok){let t='';try{t=(await r.text()).replace(/\s+/g,' ').slice(0,300)}catch(e){}throw new Error('http '+r.status+' '+t)}
   return r;
 }
@@ -241,6 +248,7 @@ async function sync(interactive){
     }
     cfg.fileId=id;cfg.last=Date.now();saveCfg();
     cfg.err='';saveCfg();setStatus('已同步');if(was!==body||interactive)render();
+    if(!cfg.email){try{const a=await(await api('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)')).json();if(a.user&&a.user.emailAddress){cfg.email=a.user.emailAddress;saveCfg()}}catch(e){}}
   }catch(e){
     cfg.err=String(e&&e.message||e).slice(0,400);saveCfg();
     setStatus(e.message==='auth'?'需重新連線':(navigator.onLine?'同步失敗':'離線'));
@@ -255,7 +263,7 @@ function connect(){
 }
 function disconnect(){
   if(token&&window.google)try{google.accounts.oauth2.revoke(token,()=>{})}catch(e){}
-  token=null;cfg.authed=0;cfg.fileId=null;saveCfg();setStatus('未連線');render();
+  token=null;clearTok();cfg.authed=0;cfg.fileId=null;cfg.email='';saveCfg();setStatus('未連線');render();
 }
 
 /* ---------- Views ---------- */
@@ -397,6 +405,7 @@ function viewSettings(){
     h+='<div class="card"><h3>'+n+'</h3>'+cats(t).map(c=>'<div class="cb"><div class="bi"><span class="dot" style="background:'+c.color+'"></span><div style="flex:1">'+esc(c.name)+'</div><button class="btn s" onclick="renameCat(\''+c.id+'\')">改名</button><button class="btn s" onclick="colorCat(\''+c.id+'\')">換色</button><button class="btn s d" onclick="delCat(\''+c.id+'\')">刪除</button></div><div class="chips">'+(c.subs||[]).map((s,i)=>'<span class="chip">'+esc(s)+' <b style="cursor:pointer;color:var(--bad)" onclick="delSubS(\''+c.id+'\','+i+')">×</b></span>').join('')+'<button class="chip" onclick="addSubS(\''+c.id+'\')">＋ 子項目</button></div></div>').join('')+'<div class="btns"><button class="btn" onclick="addCat(\''+t+'\')">+ 新增分類</button></div></div>';
   });
   h+='<div class="card"><h3>資料</h3><div class="btns" style="flex-wrap:wrap"><button class="btn" onclick="exportCSV()">匯出 CSV</button><button class="btn" onclick="exportJSON()">備份 JSON</button><button class="btn" onclick="$(\'#imp\').click()">匯入 CSV</button></div><input type="file" id="imp" accept=".csv,text/csv" style="display:none" onchange="importCSV(this.files[0]);this.value=\'\'"><div class="mut" style="margin-top:8px">匯入支援 Toshl 匯出檔，以及本程式匯出的 CSV；重複的紀錄會自動略過。</div></div>';
+  h+='<div class="mut" style="text-align:center;margin:16px 0">版本 '+VER+'</div>';
   return h;
 }
 
@@ -584,6 +593,7 @@ render();
 if(cfg.clientId&&cfg.authed){setStatus('同步中…');initAuth().then(()=>sync(false))}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&cfg.clientId&&cfg.authed&&token&&Date.now()<tokenExp)sync(false)});
 window.addEventListener('online',()=>{if(cfg.clientId&&cfg.authed)sync(false)});
+window.addEventListener('focus',()=>{if(cfg.clientId&&cfg.authed&&token&&Date.now()<tokenExp)sync(false)});
 setInterval(()=>{if(!document.hidden&&cfg.clientId&&cfg.authed&&token&&Date.now()<tokenExp)sync(false)},60000);
 </script>
 </body>
